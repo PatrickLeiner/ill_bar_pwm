@@ -14,6 +14,7 @@
 #include <ti/sysbios/knl/Clock.h>
 #include <ti/sysbios/knl/Task.h>
 #include <ti/sysbios/knl/Semaphore.h>
+#include <ti/sysbios/knl/Mailbox.h>
 
 #include <driverlib/udma.h>
 #include <driverlib/i2c.h>
@@ -33,15 +34,17 @@
 /*defines*/
 #define LIGHT_GAIN  20
 
-void task_ill(UArg arg0, UArg arg1);
-void task_bar(UArg arg0, UArg arg1);
+void task_ill();
+void task_bar();
 void pwm_fxn();
 int value_check(uint32_t value);
 void init_i2c();
 void init_spi();
 void setup_i2c();
 void setup_spi();
+void mailBox_create();
 
+Mailbox_Handle myMailbox;
 I2C_Handle i2c_handle;
 SPI_Handle spi_handle;
 Semaphore_Handle sem;
@@ -49,6 +52,11 @@ Task_Handle tsk_ill;
 Task_Handle tsk_bar;
 int resource = 0;
 int value = 0;
+I2C_Transaction i2c_transac;
+char readBuffer[1];
+char writeBuffer[2];
+//  gain_t gain = GAIN_0X;
+//  timerinterval_t timer = LOW_GAIN_INTERVAL_402MS;
 
 /*
  *  ======== main ========
@@ -61,6 +69,7 @@ int main(){
 	init_i2c();
 	setup_spi();
 	setup_i2c();
+//	mailBox_create();
 	pwm_fxn();
 
     Task_Params taskParams;
@@ -78,7 +87,7 @@ int main(){
 
     Task_Params_init(&taskParams);
     taskParams.priority = 15;
-    taskParams.stackSize = 1280;//stack in bytes
+    taskParams.stackSize = 1024;//stack in bytes
     tsk_bar = Task_create (task_bar, &taskParams, NULL);
     System_printf("tsk_bar created\n");
     System_flush();
@@ -90,27 +99,20 @@ int main(){
 /*
  *  ======== task_ill ========
  */
-Void task_ill(UArg arg0, UArg arg1){
+void task_ill(){
 	/*variables*/
 	uint32_t licht = 0x00;
 	uint32_t irlicht = 0x00;
 	uint32_t lux = 0x00;
-
-	/*I2C stuff needed*/
-	I2C_Transaction i2c_transac;
-	char readBuffer[1];
-	char writeBuffer[2];
-//	gain_t gain = GAIN_0X;
-//	timerinterval_t timer = LOW_GAIN_INTERVAL_402MS;
 
 	i2c_transac.slaveAddress = SLAVEADDR;
 	i2c_transac.readCount = 0;
 	i2c_transac.readBuf = (uint8_t*)&readBuffer;
 	i2c_transac.writeBuf = (uint8_t*)&writeBuffer;
 
-	writeBuffer[0] = CONTROL;	//address of register to write
-	writeBuffer[1] = PWR_ON;	//data to be written to the previous address in writeBuffer[0]
-	i2c_transac.writeCount = 2;
+	writeBuffer[0] = (CONTROL + PWR_ON);	//address of register to write
+//	writeBuffer[1] = PWR_ON;	//data to be written to the previous address in writeBuffer[0]
+	i2c_transac.writeCount = 1;
 
 		if(!I2C_transfer(i2c_handle, &i2c_transac)){
 			System_abort("Bad I2C transfer!");
@@ -214,7 +216,7 @@ Void task_ill(UArg arg0, UArg arg1){
 /*
  *  ======== task_bar ========
  */
-Void task_bar(UArg arg0, UArg arg1){
+void task_bar(){
 	/*variables*/
     UShort msg = 0x00;
     SPI_Transaction spi_transac;
@@ -283,11 +285,11 @@ void pwm_fxn(){
 
 	// Enable port M pin 7
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOM);
-	GPIOPinTypeGPIOOutput(GPIO_PORTM_BASE, GPIO_PIN_3);
+	GPIOPinTypeGPIOOutput(GPIO_PORTM_BASE, GPIO_PIN_7);
 
-	// Configure PM3 as T3CCP1
-	GPIOPinConfigure(GPIO_PM3_T3CCP1);
-	GPIOPinTypeTimer(GPIO_PORTM_BASE, GPIO_PIN_3);
+	// Configure PM7 as T5CCP1
+	GPIOPinConfigure(GPIO_PM7_T5CCP1);
+	GPIOPinTypeTimer(GPIO_PORTM_BASE, GPIO_PIN_7);
 
 	// Configure Timer 3
 	frequency = 3800;
@@ -376,10 +378,10 @@ void init_spi(void){
 	System_flush();
 
 	//Reset of the bargraph_click register
-/*	GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_4, 0);
-	SysCtlDelay(1000);
-	GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_4, 1);
-*/
+	GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_4, 0);
+	SysCtlDelay(50);
+	GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_4, GPIO_PIN_4);
+
 }
 
 /*==================================================================*/
@@ -431,3 +433,16 @@ void setup_spi(){
 	}
 	System_flush();
 }
+/*
+void mailBox_create(){
+    Error_Block eb;
+    Error_init(&eb);
+    Mailbox_Params mailboxParams;
+    Mailbox_Params_init(&mailboxParams);
+
+    myMailbox = Mailbox_create(sizeof(resource), 1, &mailboxParams, &eb);
+    if (myMailbox == NULL) {
+        System_abort("creating mailbox for raw failed!\n");
+    }
+}
+*/
