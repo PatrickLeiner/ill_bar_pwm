@@ -36,86 +36,78 @@
 /* Example/Board Header files */
 #include "Board.h"
 
-/* board commands */
-#define SLAVEADDR 					0x49
-#define CONTROL          			0x80
-#define CLEAR						0x70
-#define TIMING             			0x01
-#define THRESHLOWLOW       			0x02
-#define THRESHLOWHIGH       		0x03
-#define THRESHHIGHLOW       		0x04
-#define THRESHHIGHHIGH      		0x05
-#define INTERRUPT         			0x06
-#define CRC               			0x08
-#define ID               			0x0A
-#define DATA0LOW          			0x0C
-#define DATA0HIGH          			0x0D
-#define DATA1LOW         			0x0E
-#define DATA1HIGH					0x0F
-#define PWR_ON           			0x03
-#define PWR_OFF        				0x00
-#define READWORD0_COMMAND			0xAC
-#define READWORD1_COMMAND			0xAE
-#define LOW_GAIN_INTERVAL_402MS		0x02	//Gain(x1)
-#define LOW_GAIN INTERVAL_101MS		0x01	//Gain(x1)
-#define HI_GAIN_INTERVAL_101MS		0x11	//Gain(x16)
+#include "ill_click.h"
+
 
 /*defines*/
 #define LIGHT_GAIN					20
 
 
-Void task_ill(UArg arg0, UArg arg1);
-Void task_bar(UArg arg0, UArg arg1);
-Void task_pwm(UArg arg0, UArg arg1);
-Int value_check(uint32_t value);
+void task_ill(UArg arg0, UArg arg1);
+void task_bar(UArg arg0, UArg arg1);
+void task_pwm(UArg arg0, UArg arg1);
+int value_check(uint32_t value);
 void gpio_init();
+void init_i2c();
+void init_spi();
 
 
-Int resource = 0;
+int resource = 0;
 Semaphore_Handle sem;
 Task_Handle tsk_ill;
 Task_Handle tsk_bar;
 Task_Handle tsk_pwm;
 
 
-Int value = 0;
+int value = 0;
+I2C_Handle handle;
+SPI_Handle spi;
 
 /*
  *  ======== main ========
  */
-Int main()
+int main()
 {
+	/* Call board init functions */
+//    Board_initGeneral();
+//    Board_initGPIO();
+
 	gpio_init();
+	init_spi();
+//	Board_initSPI();
+	init_i2c();
+
 
     Task_Params taskParams;
 
-    /* Call board init functions */
-    Board_initGeneral();
+
 
     /* Create a Semaphore object to be use as a resource lock */
     sem = Semaphore_create(1, NULL, NULL);
 
-    /* Create two tasks that share a resource*/
+    // Create two tasks that share a resource
     Task_Params_init(&taskParams);
     taskParams.priority = 15;
+    taskParams.stackSize = 1024;//stack in bytes
     tsk_ill = Task_create (task_ill, &taskParams, NULL);
     	System_printf("tsk_ill created\n");
     	System_flush();
 
 
     Task_Params_init(&taskParams);
-    taskParams.priority = 15;
+    taskParams.priority = 10;
+    taskParams.stackSize = 1280;//stack in bytes
     tsk_bar = Task_create (task_bar, &taskParams, NULL);
     	System_printf("tsk_bar created\n");
     	System_flush();
 
-
+/*
     Task_Params_init(&taskParams);
     taskParams.priority = 2;
     tsk_pwm = Task_create (task_pwm, &taskParams, NULL);
     	System_printf("tsk_pwm created\n");
     	System_flush();
-
+*/
 
     BIOS_start();    /* does not return */
     return(0);
@@ -129,30 +121,13 @@ Void task_ill(UArg arg0, UArg arg1){
 	uint32_t licht = 0x00;
 	uint32_t irlicht = 0x00;
 	uint32_t lux = 0x00;
-	UInt32 time;
 
 	/*I2C stuff needed*/
-	I2C_Handle      handle;
-	I2C_Params      i2cparams;
 	I2C_Transaction i2c;
 	char readBuffer[1];
 	char writeBuffer[2];
 //	gain_t gain = GAIN_0X;
 //	timerinterval_t timer = LOW_GAIN_INTERVAL_402MS;
-
-	/*I2C init*/
-	I2C_Params_init(&i2cparams);
-	i2cparams.bitRate = I2C_400kHz;/*in case this is too fast use I2C_400kHz*/
-	i2cparams.transferMode = I2C_MODE_BLOCKING;/*important if you call I2C_transfer in Task context*/
-	handle = I2C_open(EK_TM4C1294XL_I2C7, &i2cparams);
-
-		if (handle == NULL) {
-			System_abort("I2C was not opened\n");
-		}
-		else{
-			System_printf("I2C opened\n");
-		}
-		System_flush();
 
 	i2c.slaveAddress = SLAVEADDR;
 	i2c.readCount = 0;
@@ -218,20 +193,6 @@ Void task_ill(UArg arg0, UArg arg1){
 			        /* Get access to resource */
 			        Semaphore_pend(sem, BIOS_WAIT_FOREVER);
 
-			        /* do work by waiting for 2 system ticks to pass */
-			        time = Clock_getTicks();
-			        while (Clock_getTicks() <= (time + 1)) {
-			            ;
-			        }
-
-			        /* do work on locked resource */
-			        resource += 1;
-			        /* unlock resource */
-
-			        Semaphore_post(sem);
-
-			        Task_sleep(10);
-
 
 			/* set i2c slave for reading */
 			writeBuffer[0] = (CONTROL + CLEAR);
@@ -270,7 +231,15 @@ Void task_ill(UArg arg0, UArg arg1){
 				    System_printf("Lux: %u\n\n", lux);
 				    System_flush();
 
-				    value = licht;
+			        /* do work on locked resource */
+			        resource = licht;
+
+			        /* unlock resource */
+
+			        Semaphore_post(sem);
+
+			        Task_sleep(1000);
+
 		}
 }
 
@@ -282,31 +251,27 @@ Void task_bar(UArg arg0, UArg arg1){
 	/*variables*/
     UShort msg = 0x00;
 
-	/*SPI stuff needed*/
-	SPI_Handle spi;
-	SPI_Params spi_parms;
-	SPI_Transaction spi_transac;
-	bool transferOK;
-	UShort transfer_msg[1];
-
-	SPI_Params_init(&spi_parms);
-	spi_parms.dataSize = 16;
-	spi_parms.bitRate = 2400000;
-	spi_parms.mode = SPI_MASTER;
-	spi_parms.frameFormat = SPI_POL0_PHA0;
-	spi = SPI_open(Board_SPI1, &spi_parms);
-
-		if (spi == NULL) {
-			System_abort("Error initializing SPI slave\n");
-		}
-		else {
-		    System_printf("SPI slave initialized\n");
-		}
-		System_flush();
-
-
-
     for (;;){
+
+		SPI_Transaction spi_transac;
+		bool transferOK;
+		UShort transfer_msg[1];
+
+
+
+    	System_printf("Running task2 function\n");
+    	System_flush();
+
+    	        if (Semaphore_getCount(sem) == 0) {
+    	            System_printf("Sem blocked in task2\n");
+    	            System_flush();
+    	        }
+
+    	        /* Get access to resource */
+    	        Semaphore_pend(sem, BIOS_WAIT_FOREVER);
+
+    	        /* do work on locked resource */
+
     	/* Initialize slave SPI transaction structure */
     	spi_transac.count = 1;
     	spi_transac.txBuf = transfer_msg;
@@ -318,33 +283,24 @@ Void task_bar(UArg arg0, UArg arg1){
     		GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_5, GPIO_PIN_5);
 
     	// Initiate SPI transfer
-    	transferOK = SPI_transfer(spi, &spi_transac);
+    		transferOK = SPI_transfer(spi, &spi_transac);
+
 
     		GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_5, 0);
 
     		if(transferOK) {
     			// Print contents of slave receive buffer
     			System_printf("SPI transfer OK\n");
+    			System_flush();
     		}
     		else {
     		    System_printf("Unsuccessful SPI transfer");
+    		    System_flush();
     		}
 
 
-    		msg = (1 << value_check(value)) - 1;
+    		msg = (1 << value_check(resource)) - 1;
 
-
-    	System_printf("Running task2 function\n");
-
-        if (Semaphore_getCount(sem) == 0) {
-            System_printf("Sem blocked in task2\n");
-        }
-
-        /* Get access to resource */
-        Semaphore_pend(sem, BIOS_WAIT_FOREVER);
-
-        /* do work on locked resource */
-        resource += 1;
         /* unlock resource */
 
         Semaphore_post(sem);
@@ -447,7 +403,15 @@ void gpio_init(void){
 
 	System_printf("gpio set for i2c\n");
 	System_flush();
+
 	//Initialization of the Booster Pack 2 for SPI
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOQ);
+	SysCtlPeripheralEnable(SYSCTL_PERIPH_SSI3);
+	    GPIOPinConfigure(GPIO_PQ0_SSI3CLK);
+	    GPIOPinConfigure(GPIO_PQ2_SSI3XDAT0);
+	    GPIOPinConfigure(GPIO_PQ3_SSI3XDAT1);
+
+	    GPIOPinTypeSSI(GPIO_PORTQ_BASE, GPIO_PIN_0 | GPIO_PIN_2 | GPIO_PIN_3);
 
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOP);
 	GPIOPinTypeGPIOOutput(GPIO_PORTP_BASE, GPIO_PIN_5);	//Pin 5 Base P for CS
@@ -461,4 +425,55 @@ void gpio_init(void){
 //		  GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_4, 0);
 		  SysCtlDelay(1000);
 //	      GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_4, 1);
+}
+
+/*==================================================================*/
+/*
+ * void init_i2c();
+ * 	Initialisiert Boosterpack 1 für I2C verwendung
+*/
+/*==================================================================*/
+
+void init_i2c(){
+	I2C_Params      i2cparams;
+	I2C_Params_init(&i2cparams);
+	i2cparams.bitRate = I2C_400kHz;/*in case this is too fast use I2C_400kHz*/
+	i2cparams.transferMode = I2C_MODE_BLOCKING;/*important if you call I2C_transfer in Task context*/
+
+	handle = I2C_open(EK_TM4C1294XL_I2C7, &i2cparams);
+
+			if (handle == NULL) {
+				System_abort("I2C was not opened\n");
+			}
+			else{
+				System_printf("I2C opened\n");
+			}
+			System_flush();
+}
+
+/*==================================================================*/
+/*
+ * void init_spi();
+ * 	Initialisiert Boosterpack 2 für SPI verwendung
+*/
+/*==================================================================*/
+
+void init_spi(){
+		SPI_init();
+		SPI_Params spi_parms;
+		SPI_Params_init(&spi_parms);
+
+		spi_parms.dataSize = 16;
+		spi_parms.bitRate = 2400000;
+		spi_parms.mode = SPI_MASTER;
+		spi_parms.frameFormat = SPI_POL0_PHA0;
+		spi = SPI_open(Board_SPI1, &spi_parms);
+
+			if (spi == NULL) {
+				System_abort("Error initializing SPI slave\n");
+			}
+			else {
+			    System_printf("SPI slave initialized\n");
+			}
+			System_flush();
 }
