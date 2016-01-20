@@ -1,3 +1,9 @@
+/*
+ * SYS_BIOS.c
+ *
+ *  Created on: Jan 19, 2016
+ *      Author: Leiner, Datzreiter
+ */
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -18,6 +24,7 @@
 
 #include <driverlib/udma.h>
 #include <driverlib/i2c.h>
+#include <ill_bar_click.h>
 #include "driverlib/gpio.h"
 #include "driverlib/pin_map.h"
 #include "driverlib/pwm.h"
@@ -29,35 +36,35 @@
 
 /* Example/Board Header files */
 #include "Board.h"
-#include "ill_click.h"
-
-/*defines*/
-#define LIGHT_GAIN  20
+#include "ill_bar_click.h"
 
 void task_ill();
 void task_bar();
 void pwm_fxn();
-int value_check(uint32_t value);
+int value_conversion(uint32_t value);
 void init_i2c();
 void init_spi();
 void setup_i2c();
 void setup_spi();
 void mailBox_create();
+void task_create();
+void semaphore_create();
+
 
 Mailbox_Handle myMailbox;
+Task_Params taskParams;
 I2C_Handle i2c_handle;
+I2C_Transaction i2c_transac;
 SPI_Handle spi_handle;
 Semaphore_Handle sem;
 Task_Handle tsk_ill;
 Task_Handle tsk_bar;
 int resource = 0;
 int value = 0;
-I2C_Transaction i2c_transac;
 char readBuffer[1];
 char writeBuffer[2];
 //  gain_t gain = GAIN_0X;
 //  timerinterval_t timer = LOW_GAIN_INTERVAL_402MS;
-
 /*
  *  ======== main ========
  */
@@ -69,33 +76,14 @@ int main(){
 	init_i2c();
 	setup_spi();
 	setup_i2c();
+	task_create();
+	semaphore_create();
 //	mailBox_create();
 	pwm_fxn();
 
-    Task_Params taskParams;
-
-    /* Create a Semaphore object to be use as a resource lock */
-    sem = Semaphore_create(1, NULL, NULL);
-
-    // Create two tasks that share a resource
-    Task_Params_init(&taskParams);
-    taskParams.priority = 15;
-    taskParams.stackSize = 1024;//stack in bytes
-    tsk_ill = Task_create (task_ill, &taskParams, NULL);
-    System_printf("tsk_ill created\n");
-    System_flush();
-
-    Task_Params_init(&taskParams);
-    taskParams.priority = 15;
-    taskParams.stackSize = 1024;//stack in bytes
-    tsk_bar = Task_create (task_bar, &taskParams, NULL);
-    System_printf("tsk_bar created\n");
-    System_flush();
-
     BIOS_start();    /* does not return */
-    return(0);
+    return 0;
 }
-
 /*
  *  ======== task_ill ========
  */
@@ -212,7 +200,6 @@ void task_ill(){
 	        Task_sleep(5);
 		}
 }
-
 /*
  *  ======== task_bar ========
  */
@@ -261,7 +248,7 @@ void task_bar(){
     	    System_flush();
     	}
 
-    	msg = (1 << value_check(resource)) - 1;
+    	msg = (1 << value_conversion(resource)) - 1;
 
         /* unlock resource */
         Semaphore_post(sem);
@@ -271,7 +258,7 @@ void task_bar(){
 /*
  *  ======== pwm_fxn ========
  */
-void pwm_fxn(){
+void pwm_fxn(void){
 	uint32_t duty;
 	uint32_t frequency;
 	uint32_t period;
@@ -307,8 +294,10 @@ void pwm_fxn(){
 	TimerEnable(TIMER3_BASE, TIMER_BOTH);
 
 }
-
-Int value_check(uint32_t value){
+/*
+ *  ======== value_check ========
+ */
+int value_conversion(uint32_t value){
 	if(value > (58981/LIGHT_GAIN)){
 		return 10;
 	}
@@ -340,8 +329,10 @@ Int value_check(uint32_t value){
 		return 0;
 	}
 }
-
-void init_i2c(void){
+/*
+ *  ======== init_i2c ========
+ */
+void init_i2c(){
 	//Initialization of the Booster Pack 1 for I2C
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOD);
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_I2C7);
@@ -358,8 +349,10 @@ void init_i2c(void){
 	System_printf("gpio set for i2c\n");
 	System_flush();
 }
-
-void init_spi(void){
+/*
+ *  ======== init_spi ========
+ */
+void init_spi(){
 	//Initialization of the Booster Pack 2 for SPI
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_GPIOQ);
 	SysCtlPeripheralEnable(SYSCTL_PERIPH_SSI3);
@@ -383,14 +376,9 @@ void init_spi(void){
 	GPIOPinWrite(GPIO_PORTP_BASE, GPIO_PIN_4, GPIO_PIN_4);
 
 }
-
-/*==================================================================*/
 /*
- * void init_i2c();
- * 	Initialisiert Boosterpack 1 für I2C verwendung
-*/
-/*==================================================================*/
-
+ *  ======== setup_i2c ========
+ */
 void setup_i2c(){
 	I2C_Params      i2cparams;
 	I2C_Params_init(&i2cparams);
@@ -407,14 +395,9 @@ void setup_i2c(){
 	}
 	System_flush();
 }
-
-/*==================================================================*/
 /*
- * void init_spi();
- * 	Initialisiert Boosterpack 2 für SPI verwendung
-*/
-/*==================================================================*/
-
+ *  ======== setup_spi ========
+ */
 void setup_spi(){
 	SPI_Params spi_parms;
 	SPI_Params_init(&spi_parms);
@@ -434,7 +417,10 @@ void setup_spi(){
 	System_flush();
 }
 /*
-void mailBox_create(){
+ *  ======== mailBox_create ========
+ */
+/*
+static void mailBox_create(void){
     Error_Block eb;
     Error_init(&eb);
     Mailbox_Params mailboxParams;
@@ -446,3 +432,28 @@ void mailBox_create(){
     }
 }
 */
+/*
+ *  ======== task_create ========
+ */
+
+void task_create(){
+    Task_Params_init(&taskParams);
+    taskParams.priority = 15;
+    taskParams.stackSize = 1024;
+    tsk_ill = Task_create (task_ill, &taskParams, NULL);
+    System_printf("tsk_ill created\n");
+    System_flush();
+
+    Task_Params_init(&taskParams);
+    taskParams.priority = 15;
+    taskParams.stackSize = 1024;
+    tsk_bar = Task_create (task_bar, &taskParams, NULL);
+    System_printf("tsk_bar created\n");
+    System_flush();
+}
+/*
+ *  ======== semaphore_create ========
+ */
+void semaphore_create(){
+    sem = Semaphore_create(1, NULL, NULL);
+}
